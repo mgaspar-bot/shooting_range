@@ -16,7 +16,7 @@ function App() {
       return
     }
 
-    const app = new ThreeApp(canvasElement as Element)
+    const app = new ThreeApp(canvasElement as HTMLElement)
     
     return () => {app.destroy()}
 

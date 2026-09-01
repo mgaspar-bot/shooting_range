@@ -1,7 +1,6 @@
 import * as THREE from 'three'
-import {OrbitControls} from 'three/addons/controls/OrbitControls.js'
-
-import type { Object3D, Scene } from 'three'
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js'
+import type { Controls, Object3D, Scene } from 'three'
 import { Ground } from './Objects/Ground'
 import { Reception } from './Objects/Reception'
 
@@ -13,8 +12,15 @@ export class ThreeApp {
   private scene: THREE.Scene
   private camera: THREE.PerspectiveCamera
 
-  private controls?: OrbitControls
+  private controls: PointerLockControls
   private devMode: boolean = false
+
+  keys = {
+        w: false,
+        s: false,
+        a: false,
+        d: false
+      }
 
   constructor(private container: HTMLElement, initialScene?: Object3D) {
     // Initialize renderer and add it to the DOM
@@ -28,8 +34,9 @@ export class ThreeApp {
     this.scene = new THREE.Scene()
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
 
-    if (this.devMode)
-        this.controls = new OrbitControls(this.camera, this.renderer.domElement)
+    this.controls = new PointerLockControls(this.camera, document.body)
+    this.setupPointerLock()
+    
 
     if (initialScene) {
         this.scene.add(initialScene)
@@ -38,10 +45,25 @@ export class ThreeApp {
     }
 
 
+
+    window.addEventListener('keydown', (event) => {
+      if (event.code === 'KeyW') this.keys.w = true
+      if (event.code === 'KeyS') this.keys.s = true
+      if (event.code === 'KeyA') this.keys.a = true
+      if (event.code === 'KeyD') this.keys.d = true
+    })
+
+    window.addEventListener('keyup', (event) => {
+      if (event.code === 'KeyW') this.keys.w = false
+      if (event.code === 'KeyS') this.keys.s = false
+      if (event.code === 'KeyA') this.keys.a = false
+      if (event.code === 'KeyD') this.keys.d = false
+    })
+
+
  
 
 
-    this.canvas.addEventListener('mousemove', this.setPickPosition)
     this.renderer.setAnimationLoop(this.animate)
   }
 
@@ -57,58 +79,32 @@ export class ThreeApp {
     this.camera.position.y = 10
   }
 
-  private animate = (time: DOMHighResTimeStamp) => {
-    // update and render
-    window.addEventListener("keydown", (event) => {
-        switch (event.key) {
-            case "w":
-                this.camera.position.z -= 10/time
-                break
-            case "s":
-                this.camera.position.z += 10/time
-                break
-            case "a":
-                this.camera.position.x -= 10/time 
-                break
-            case "d":
-                this.camera.position.x += 10/time
-                break
-        }    
+  private setupPointerLock() {
+    const pointerLockControls = this.controls as PointerLockControls | undefined
+
+    this.canvas.addEventListener('click', () => {
+      if (!pointerLockControls) return
+      if (!pointerLockControls.isLocked) {
+        pointerLockControls.lock()
+      }
     })
-    const yaw = this.pickPosition.x * Math.PI / 3
-    const pitch = this.pickPosition.y * Math.PI / 6
-    const lookTarget = new THREE.Vector3(
-      this.camera.position.x + Math.sin(yaw) * Math.cos(pitch),
-      this.camera.position.y + Math.sin(pitch),
-      this.camera.position.z - Math.cos(yaw) * Math.cos(pitch),
-    )
-    this.camera.lookAt(lookTarget)
-    this.controls?.update()
+  }
+
+  private animate = (time: DOMHighResTimeStamp) => {
+    const delta = 0.0005
+
+    if (this.keys.w) this.controls.moveForward(time*delta)
+    if (this.keys.s) this.controls.moveForward(-time*delta)
+    if (this.keys.a) this.controls.moveRight(-time*delta)
+    if (this.keys.d) this.controls.moveRight(time*delta)
+
     this.renderer.render(this.scene, this.camera)
   }
 
   destroy() {
     this.renderer.setAnimationLoop(null)
-    this.canvas.removeEventListener('mousemove', this.setPickPosition)
     this.renderer.dispose()
     this.renderer.domElement.remove()
-  }
-
-  getCanvasRelativePosition(event: MouseEvent) {
-    const rect = this.canvas.getBoundingClientRect();
-    return {
-      x: (event.clientX - rect.left) * this.canvas.width  / rect.width,
-      y: (event.clientY - rect.top ) * this.canvas.height / rect.height,
-    };
-  }
- 
-  pickPosition = { x: 0, y: 0 }
-  setPickPosition = (event: MouseEvent) => {
-    const pos = this.getCanvasRelativePosition(event);
-    this.pickPosition = {
-      x: (pos.x / this.canvas.width ) *  2 - 1,
-      y: (pos.y / this.canvas.height) * -2 + 1
-    }
   }
 
   // aviam si el que vull es que la camera es mogui amb el mouse,
