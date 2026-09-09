@@ -1,23 +1,18 @@
-import * as THREE from 'three';
-import brickWallImage from '../../assets/detailed-red-brick-wall-background-texture-copy-space.jpg'
+import { Room } from './Room';
+import { createTiledWall } from './GltfTile';
+import wallSegmentModel from '../../assets/models/wall-segment.glb';
 
+export const RECEPTION_SIZE = 100;
+export const ROOM_HEIGHT = 120;
 
-export class Reception extends THREE.Mesh {
-    constructor(maxAni?: number) {
-       // For now Reception is just a box
-       const receptionGeometry = new THREE.BoxGeometry( 100, 200, 100 );
-       const wallTexture = new THREE.TextureLoader().load( brickWallImage);
-       wallTexture.wrapS = THREE.RepeatWrapping;
-       wallTexture.wrapT = THREE.RepeatWrapping;
-       wallTexture.repeat.set( 5, 5 );
-       wallTexture.anisotropy = maxAni || 1;
-       wallTexture.colorSpace = THREE.SRGBColorSpace;
-       const receptionMaterial = new THREE.MeshBasicMaterial( {
-        map: wallTexture,
-        side: THREE.DoubleSide, 
-        // wireframe: true
-       });
-       super(receptionGeometry, receptionMaterial);
-       this.position.y = 5; // position the reception box above the ground
+// The reception room. Its north wall has the doorway into the shooting range.
+export class Reception extends Room {
+    constructor() {
+        super({
+            size: RECEPTION_SIZE,
+            height: ROOM_HEIGHT,
+            doorWalls: ['north'],
+            wallFactory: (w, h, t) => createTiledWall(wallSegmentModel, w, h, t),
+        });
     }
 }

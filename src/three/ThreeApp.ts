@@ -1,8 +1,9 @@
 import * as THREE from 'three'
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js'
 import type { Controls, Object3D, Scene } from 'three'
-import { Ground } from './Objects/Ground'
-import { Reception } from './Objects/Reception'
+import { Reception, RECEPTION_SIZE } from './Objects/Reception'
+import { ShootingRange, SHOOTING_RANGE_SIZE } from './Objects/ShootingRange'
+import { Floor } from './Objects/Floor'
 
 
 export class ThreeApp {
@@ -14,6 +15,9 @@ export class ThreeApp {
 
   private controls: PointerLockControls
   private devMode: boolean = false
+
+  private lastFrameTime = 0
+  private readonly moveSpeed = 50 // units per second
 
   keys = {
         w: false,
@@ -69,14 +73,28 @@ export class ThreeApp {
 
   private buildInitialScene(initialScene?: Object3D) {
 
-    const maxAni = this.renderer.capabilities.getMaxAnisotropy()
-    const ground = new Ground(maxAni)
-    this.scene.add( ground );
+    // The GLTF-based rooms/floor use a lit material so bevelled details
+    // (like the groove around each floor tile) actually catch light.
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.6))
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2)
+    sun.position.set(50, 100, 50)
+    this.scene.add(sun)
 
-    const reception = new Reception(maxAni)
+    // Two rooms placed back to back along Z, sharing a doorway at the
+    // boundary between them (Reception's north wall has the doorway,
+    // ShootingRange's south wall is left open to match it).
+    const reception = new Reception()
+    reception.position.z = -RECEPTION_SIZE / 2
     this.scene.add( reception );
-    
-    this.camera.position.y = 10
+
+    const shootingRange = new ShootingRange()
+    shootingRange.position.z = RECEPTION_SIZE / 2
+    this.scene.add( shootingRange );
+
+    const floor = new Floor(RECEPTION_SIZE, RECEPTION_SIZE + SHOOTING_RANGE_SIZE)
+    this.scene.add( floor );
+
+    this.camera.position.set(0, 10, -RECEPTION_SIZE / 2)
   }
 
   private setupPointerLock() {
@@ -91,12 +109,15 @@ export class ThreeApp {
   }
 
   private animate = (time: DOMHighResTimeStamp) => {
-    const delta = 0.0005
+    const deltaSeconds = this.lastFrameTime === 0 ? 0 : (time - this.lastFrameTime) / 1000
+    this.lastFrameTime = time
 
-    if (this.keys.w) this.controls.moveForward(time*delta)
-    if (this.keys.s) this.controls.moveForward(-time*delta)
-    if (this.keys.a) this.controls.moveRight(-time*delta)
-    if (this.keys.d) this.controls.moveRight(time*delta)
+    const distance = this.moveSpeed * deltaSeconds
+
+    if (this.keys.w) this.controls.moveForward(distance)
+    if (this.keys.s) this.controls.moveForward(-distance)
+    if (this.keys.a) this.controls.moveRight(-distance)
+    if (this.keys.d) this.controls.moveRight(distance)
 
     this.renderer.render(this.scene, this.camera)
   }
@@ -107,8 +128,6 @@ export class ThreeApp {
     this.renderer.domElement.remove()
   }
 
-  // aviam si el que vull es que la camera es mogui amb el mouse,
-  // haig de trobar el punt del mouse, fer un vector cap allà i passar-li a lookAt
   
 }
 
