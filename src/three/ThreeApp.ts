@@ -31,11 +31,12 @@ export class ThreeApp {
   // A targeting grid (reticle), stuck to screen-centre the same way the
   // weapon is stuck to its corner - it lives in weaponScene too, so it
   // draws in that same depth-cleared second pass and is never hidden
-  // behind world geometry. Unlike the weapon it has zero lateral offset,
-  // so it always projects to the exact centre of the viewport regardless
-  // of aspect ratio or FOV.
+  // behind world geometry. Its screen position is computed each frame via
+  // the same raycaster used to fire (see animate/spawnBulletMark), offset
+  // by crosshairKick below - so at rest it sits dead-centre, and visually
+  // tracks the actual point of aim once recoil starts pushing that off-centre.
   private reticle: THREE.Object3D
-  private readonly reticleOffset = new THREE.Vector3(0, 0, -15)
+  private readonly reticleDistance = 15
 
   // Recoil: a sudden upward kick on the weapon's rotation, applied on top
   // of its normal screen-stuck transform in animate(), decaying back to 0
@@ -43,6 +44,26 @@ export class ThreeApp {
   private recoilKick = 0
   private readonly recoilKickAmount = 0.14 // radians, applied per shot
   private readonly recoilRecoverySpeed = 10 // per second, exponential decay rate
+
+  // Recoil's effect on actual aim: each shot nudges this NDC-space offset
+  // (same units raycaster.setFromCamera expects) by a small random amount,
+  // mostly upward like a real kick, with left/right randomness on top -
+  // both the reticle and the shot's own raycast read this, so where the
+  // crosshair visibly lands is exactly where the next bullet actually goes.
+  // Decays back toward (0,0) the same way recoilKick does; capped so
+  // holding the trigger down can't spray it off-screen indefinitely.
+  private crosshairKick = new THREE.Vector2(0, 0)
+  private readonly crosshairKickAmount = 0.025 // NDC units, added per shot
+  private readonly maxCrosshairKick = 0.12 // NDC units
+  private readonly crosshairRecoverySpeed = 6 // per second, exponential decay rate
+
+  // Automatic fire: held down for as long as the mouse button is down
+  // (see handleMouseDown/Up), gated on a fixed rounds-per-second rate
+  // rather than firing once per frame so it's not tied to framerate.
+  private isFiring = false
+  private readonly fireRate = 10 // rounds per second
+  private readonly fireInterval = 1 / this.fireRate
+  private timeSinceLastShot = 0
 
   private raycaster = new THREE.Raycaster()
   // Capped so firing a lot doesn't grow the scene forever - oldest marks
@@ -76,7 +97,6 @@ export class ThreeApp {
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
     })
-    this.renderer.setSize(window.innerWidth, window.innerHeight)
     // Rendering the weapon in a second pass (see animate) needs manual
     // control over clearing - autoClear would wipe the main scene's pixels
     // before the second render() call ever draws anything.
@@ -85,7 +105,13 @@ export class ThreeApp {
     this.canvas = this.renderer.domElement
     // Initialize scene and camera
     this.scene = new THREE.Scene()
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
+    // Aspect is set properly by handleResize() below, once the renderer
+    // and camera both exist - window.innerWidth/innerHeight can be 0 this
+    // early in some embeds, and a 0 aspect permanently poisons the
+    // projection matrix (NaN in, NaN forever after) with nothing to
+    // self-correct it, silently breaking raycasting (e.g. bullet marks).
+    this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000)
+    this.handleResize()
 
     // A separate scene/lights for the weapon viewmodel - it's rendered in
     // its own pass (see animate), so the main scene's lights don't reach it.
@@ -130,11 +156,6 @@ export class ThreeApp {
     })
 
     window.addEventListener('resize', this.handleResize)
-
-
- 
-
-
     this.renderer.setAnimationLoop(this.animate)
   }
 
@@ -213,35 +234,73 @@ export class ThreeApp {
   }
 
   private handleResize = () => {
+    // Guard against a 0-sized viewport (can happen transiently in some
+    // embeds, briefly right at startup): dividing by 0 gives a NaN aspect,
+    // which poisons the projection matrix with no way to self-correct -
+    // every raycast (bullet marks included) would silently stop hitting
+    // anything, forever, even once the real size becomes available. Just
+    // skip the update and keep whatever the last good size was.
+    if (window.innerWidth <= 0 || window.innerHeight <= 0) return
+
     this.camera.aspect = window.innerWidth / window.innerHeight
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(window.innerWidth, window.innerHeight)
   }
 
+  private handleMouseDown = (event: MouseEvent) => {
+    if (event.button !== 0) return // left click only
+    if (!this.controls.isLocked) return
+    this.isFiring = true
+    // Fire the first shot immediately rather than waiting out a full
+    // fireInterval - matches how the single-click version used to feel.
+    this.timeSinceLastShot = this.fireInterval
+  }
+
+  private handleMouseUp = (event: MouseEvent) => {
+    if (event.button !== 0) return
+    this.isFiring = false
+  }
+
   private setupPointerLock() {
     const pointerLockControls = this.controls as PointerLockControls | undefined
 
+    // Only the very first, lock-triggering click is a reliable 'click'
+    // event once the pointer is locked - most browsers stop firing 'click'
+    // on the locked element afterward. 'mousedown' keeps firing normally,
+    // which is why it's the standard trigger for firing once locked (the
+    // same pattern three.js's own PointerLockControls example uses).
     this.canvas.addEventListener('click', () => {
-      console.log('canvas click')
       if (!pointerLockControls) return
       if (!pointerLockControls.isLocked) {
         pointerLockControls.lock()
-      } else {
-        console.log('shooting')
-        this.shoot()
       }
     })
+
+    document.addEventListener('mousedown', this.handleMouseDown)
+    document.addEventListener('mouseup', this.handleMouseUp)
 
     this.controls.addEventListener('lock', () => {
       this.overlay.style.display = 'none'
     })
     this.controls.addEventListener('unlock', () => {
       this.overlay.style.display = 'flex'
+      // Escape (or losing focus) unlocks without necessarily firing a
+      // mouseup first - without this, holding the button through an
+      // unlock would leave isFiring stuck true.
+      this.isFiring = false
     })
   }
 
   private shoot(): void {
     this.recoilKick = this.recoilKickAmount
+
+    // Mostly-upward kick (like a real gun's recoil) with left/right
+    // randomness on top, accumulating across shots during a sustained
+    // automatic burst - clampLength keeps it from growing without bound.
+    this.crosshairKick.y += Math.random() * this.crosshairKickAmount
+    this.crosshairKick.x += (Math.random() - 0.5) * this.crosshairKickAmount * 2
+    this.crosshairKick.clampLength(0, this.maxCrosshairKick)
+
     this.playGunshot()
     this.spawnBulletMark()
   }
@@ -283,7 +342,9 @@ export class ThreeApp {
   // along its normal and facing outward - a bullet hole without needing a
   // decal texture.
   private spawnBulletMark(): void {
-    this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera)
+    // Fires toward the current (possibly recoil-kicked) aim point, not
+    // dead-centre - matches where the reticle is actually drawn.
+    this.raycaster.setFromCamera(this.crosshairKick, this.camera)
     const hit = this.raycaster
       .intersectObject(this.scene, true)
       .find((candidate) => !candidate.object.userData.isBulletMark)
@@ -307,7 +368,13 @@ export class ThreeApp {
   }
 
   private animate = (time: DOMHighResTimeStamp) => {
-    const deltaSeconds = this.lastFrameTime === 0 ? 0 : (time - this.lastFrameTime) / 1000
+    // Clamped so a long stall (a slow frame, or a backgrounded/throttled
+    // tab resuming after tens of seconds) can't be read as real elapsed
+    // time - without this, the auto-fire loop below would try to "catch
+    // up" every round that should've fired during the gap in one burst,
+    // and movement/recoil would similarly jump or glitch.
+    const rawDeltaSeconds = this.lastFrameTime === 0 ? 0 : (time - this.lastFrameTime) / 1000
+    const deltaSeconds = Math.min(rawDeltaSeconds, 0.1)
     this.lastFrameTime = time
 
     const distance = this.moveSpeed * deltaSeconds
@@ -321,6 +388,20 @@ export class ThreeApp {
     // just fired - exponential, so it snaps back quickly at first and eases
     // in at the tail instead of a linear, mechanical-looking recovery.
     this.recoilKick *= Math.exp(-this.recoilRecoverySpeed * deltaSeconds)
+    this.crosshairKick.multiplyScalar(Math.exp(-this.crosshairRecoverySpeed * deltaSeconds))
+
+    // Automatic fire: while the trigger is held, fire at a fixed rate
+    // rather than once per frame - a `while` (not `if`) catches up if a
+    // slow frame skips past more than one fireInterval.
+    if (this.isFiring && this.controls.isLocked) {
+      this.timeSinceLastShot += deltaSeconds
+      while (this.timeSinceLastShot >= this.fireInterval) {
+        this.shoot()
+        this.timeSinceLastShot -= this.fireInterval
+      }
+    } else {
+      this.timeSinceLastShot = 0
+    }
 
     // Stick the weapon to the same spot on screen: same rotation as the
     // camera, offset by a fixed amount in the camera's own local space.
@@ -332,9 +413,12 @@ export class ThreeApp {
     recoiledOffset.z += this.recoilKick * 3
     this.weapon.position.copy(this.camera.position).add(recoiledOffset.applyQuaternion(this.camera.quaternion))
 
-    // Same trick, but dead ahead with no lateral offset - always screen-centre.
+    // Reticle tracks the actual (recoil-kicked) aim point: reuse the same
+    // raycaster spawnBulletMark fires with, so the crosshair always shows
+    // exactly where the next shot will go.
+    this.raycaster.setFromCamera(this.crosshairKick, this.camera)
     this.reticle.quaternion.copy(this.camera.quaternion)
-    this.reticle.position.copy(this.camera.position).add(this.reticleOffset.clone().applyQuaternion(this.camera.quaternion))
+    this.reticle.position.copy(this.raycaster.ray.origin).addScaledVector(this.raycaster.ray.direction, this.reticleDistance)
 
     this.renderer.clear()
     this.renderer.render(this.scene, this.camera)
@@ -344,6 +428,8 @@ export class ThreeApp {
 
   destroy() {
     window.removeEventListener('resize', this.handleResize)
+    document.removeEventListener('mousedown', this.handleMouseDown)
+    document.removeEventListener('mouseup', this.handleMouseUp)
     this.renderer.setAnimationLoop(null)
     this.renderer.dispose()
     this.renderer.domElement.remove()
